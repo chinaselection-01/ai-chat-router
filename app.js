@@ -96,6 +96,11 @@ async function readDocx(file) {
 }
 
 /* ---------------- 自动路由 ---------------- */
+// 画图意图检测（生成图/画一张/draw 等）
+const IMGGEN_RE1 = /(生成|画|绘制|渲染|create|generate|draw|paint|make)\s*(一)?(张|幅|个)?\s*(图|图片|图像|画|海报|logo|图标|插画|image|picture|photo|illustration|poster)/i;
+const IMGGEN_RE2 = /(画一张|画个|画一幅|来一张图|生成图片|生成图像|生成一张|image generation|text-to-image)/i;
+function isImgGen(m) { return IMGGEN_RE1.test(m) || IMGGEN_RE2.test(m); }
+
 function route(message, files) {
   const hasImage = files.some((f) => f.isImage);
   const hasCodeFile = files.some((f) => CODE_EXT.includes(f.ext));
@@ -103,6 +108,10 @@ function route(message, files) {
   const codeKw = /代码|写(个|一段|个)?(函数|脚本|程序)|bug|编程|python|javascript|java\b|报错|调试|正则|sql/i.test(message);
   const longKw = /总结|概括|长文|分析(文档|这篇)|翻译|提取|整理|归纳/i.test(message);
 
+  // 画图任务：Pollinations 完全免费、无需 Key、浏览器可直接访问
+  if (!hasImage && isImgGen(message)) {
+    return { provider: 'pollinations', model: 'flux', reason: '画图任务 → 图像生成模型 (Flux · 免费·无需Key)' };
+  }
   if (hasImage) {
     if (KEYS.gemini) return { provider: 'gemini', model: MODELS.gemini.flash, reason: '检测到图片 → 视觉理解模型' };
     if (KEYS.openrouter) return { provider: 'openrouter', model: MODELS.openrouter.flash, reason: '检测到图片 → 视觉模型' };
@@ -118,11 +127,21 @@ function route(message, files) {
     if (KEYS.openrouter) return { provider: 'openrouter', model: MODELS.openrouter.longctx, reason: '长文本 → 超长上下文 (10M)' };
     return { error: '长文本任务需要 Gemini 或 OpenRouter 的 Key' };
   }
-  // 默认：高速常规对话
-  if (KEYS.groq) return { provider: 'groq', model: MODELS.groq.fast, reason: '常规对话 → 高速模型 (Groq)' };
+  // 默认：常规对话（Groq 浏览器直连常被跨域拦截，放最后兜底）
   if (KEYS.gemini) return { provider: 'gemini', model: MODELS.gemini.flash, reason: '常规对话 → Gemini' };
   if (KEYS.openrouter) return { provider: 'openrouter', model: MODELS.openrouter.chat, reason: '常规对话 → 免费模型' };
+  if (KEYS.groq) return { provider: 'groq', model: MODELS.groq.fast, reason: '常规对话 → 高速模型 (Groq·可能被浏览器跨域拦截)' };
   return { error: '请先在右上角「设置」里填入至少一个免费 API Key' };
+}
+
+// 降级链：主路由失败（网络/跨域/限流）时按可用 Key 依次换厂商重试
+function fallbackChain(rt, message, files) {
+  const hasImage = files.some((f) => f.isImage);
+  const chain = [];
+  if (KEYS.gemini) chain.push({ provider: 'gemini', model: MODELS.gemini.flash, reason: '降级 → Gemini' });
+  if (KEYS.openrouter) chain.push({ provider: 'openrouter', model: hasImage ? MODELS.openrouter.flash : MODELS.openrouter.chat, reason: '降级 → OpenRouter' });
+  if (KEYS.groq && !hasImage) chain.push({ provider: 'groq', model: MODELS.groq.fast, reason: '降级 → Groq' });
+  return chain.filter((r) => !(r.provider === rt.provider && r.model === rt.model));
 }
 
 /* ---------------- 厂商调用（流式） ---------------- */
@@ -137,13 +156,36 @@ function buildUserContent(message, files) {
 async function callModel(rt, message, files, onToken, onDone) {
   const content = buildUserContent(message, files);
   const images = files.filter((f) => f.isImage);
-  try {
-    if (rt.provider === 'gemini') return await gemini(rt.model, content, images, onToken, onDone);
-    if (rt.provider === 'openrouter') return await openrouter(rt.model, content, images, onToken, onDone);
-    if (rt.provider === 'groq') return await groq(rt.model, content, onToken, onDone);
-  } catch (e) {
-    onDone('调用出错：' + e.message);
-  }
+  if (rt.provider === 'gemini') return await gemini(rt.model, content, images, onToken, onDone);
+  if (rt.provider === 'openrouter') return await openrouter(rt.model, content, images, onToken, onDone);
+  if (rt.provider === 'groq') return await groq(rt.model, content, onToken, onDone);
+  throw new Error('未知厂商: ' + rt.provider);
+}
+
+// Pollinations 图像生成（完全免费、无需 Key、浏览器可直连）
+async function pollinationsImg(message, bubble) {
+  // 去掉"生成一张图，"这类指令前缀，把剩余部分当画面描述
+  const prompt = message
+    .replace(/^\s*(请|帮我|帮我请)?\s*(生成|画|绘制|渲染|create|generate|draw|paint|make)\s*(一)?(张|幅|个)?\s*(图|图片|图像|画|海报|插画)?\s*[，,。:：、\s]*/i, '')
+    .trim() || message;
+  const url = 'https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt)
+    + '?width=1024&height=768&nologo=true&seed=' + Math.floor(Math.random() * 999999);
+  bubble.textContent = '🖼️ 正在生成图片…（Flux 模型，约 10~30 秒）';
+  const img = new Image();
+  img.src = url;
+  img.style.maxWidth = '100%';
+  img.style.borderRadius = '10px';
+  await new Promise((res, rej) => {
+    img.onload = res;
+    img.onerror = () => rej(new Error('图片生成失败/超时，点下面的链接重试'));
+  });
+  bubble.textContent = '';
+  bubble.appendChild(img);
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  a.textContent = '🔍 查看原图 · 再点一次换一张（随机种子）';
+  a.style.cssText = 'display:block;margin-top:6px;font-size:13px;';
+  bubble.appendChild(a);
 }
 
 // Gemini（支持图片 inline + 长文本 + 流式 SSE）
@@ -277,23 +319,54 @@ async function send() {
   addMsg('user', userText);
 
   const rt = route(message, pendingFiles);
-  showRouteInfo(rt);
-  if (rt.error) { addMsg('bot', rt.error); clearAttachments(); input.value = ''; return; }
+  if (rt.error) { showRouteInfo(rt); addMsg('bot', rt.error); clearAttachments(); input.value = ''; return; }
 
   const botBubble = addMsg('bot', '');
   const badge = document.createElement('div');
   badge.className = 'badge';
-  badge.textContent = `${rt.provider.toUpperCase()} · ${rt.model}`;
   botBubble.parentNode.insertBefore(badge, botBubble);
-  let acc = '';
-  await callModel(rt, message, pendingFiles, (t) => {
-    acc += t;
-    botBubble.textContent = acc;
-    chatEl.scrollTop = chatEl.scrollHeight;
-  }, (final) => {
-    renderMarkdownPlain(botBubble, final || acc);
-    chatEl.scrollTop = chatEl.scrollHeight;
-  });
+
+  if (rt.provider === 'pollinations') {
+    badge.textContent = 'POLLINATIONS · flux';
+    showRouteInfo(rt);
+    try {
+      await pollinationsImg(message, botBubble);
+    } catch (e) {
+      botBubble.textContent = '调用出错：' + e.message;
+    }
+  } else {
+    // 主路由 + 降级链：网络/跨域/限流失败自动换下一家
+    const chain = [rt, ...fallbackChain(rt, message, pendingFiles)];
+    let lastErr = '';
+    let ok = false;
+    for (const r of chain) {
+      badge.textContent = `${r.provider.toUpperCase()} · ${r.model}`;
+      showRouteInfo(r);
+      let acc = '';
+      try {
+        await callModel(r, message, pendingFiles, (t) => {
+          acc += t;
+          botBubble.textContent = acc;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }, (final) => {
+          renderMarkdownPlain(botBubble, final || acc);
+        });
+        ok = true;
+        break;
+      } catch (e) {
+        lastErr = e.message;
+        if (chain.indexOf(r) < chain.length - 1) {
+          botBubble.textContent = `⚠️ ${r.provider.toUpperCase()} 调用失败（${lastErr.slice(0, 80)}），自动换下一家…`;
+        }
+      }
+    }
+    if (!ok) {
+      renderMarkdownPlain(botBubble,
+        '调用出错：' + lastErr +
+        '\n\n💡 提示：Groq 的接口在浏览器里常被跨域拦截（CORS），建议在「设置」里填 Gemini 或 OpenRouter 的免费 Key（都不用信用卡）。画图任务无需任何 Key。');
+    }
+  }
+  chatEl.scrollTop = chatEl.scrollHeight;
 
   clearAttachments();
   input.value = '';
@@ -327,7 +400,7 @@ function init() {
 
   const tip = document.createElement('div');
   tip.className = 'empty-tip';
-  tip.innerHTML = '在右上角「设置」填入免费 Key 后即可使用。<br>发消息自动路由：长文本→理解模型 / 图片→视觉模型 / 代码→代码模型。';
+  tip.innerHTML = '填入免费 Key 后即可聊天（推荐 Gemini，免信用卡）。<br>🖼️ <b>画图任务无需任何 Key</b>：直接说"生成一张图：悬崖边的树拴着船"即可。<br>发消息自动路由：长文本→理解模型 / 图片→视觉模型 / 代码→代码模型 / 画图→Flux。';
   chatEl.appendChild(tip);
 
   document.getElementById('settingsBtn').onclick = () =>
