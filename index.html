@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>智能路由聊天 · Smart Chat Router</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🤖 智能路由聊天</div>
+    <div class="brand-sub">发消息自动选模型 · 长文本→理解 · 图形→视觉 · 代码→代码</div>
+    <button id="settingsBtn" class="icon-btn" title="设置 API Key">⚙️ 设置</button>
+  </header>
+
+  <!-- 设置面板 -->
+  <div id="settingsPanel" class="panel hidden">
+    <h3>API Key 设置（只用免费额度，无需信用卡）</h3>
+    <p class="hint">Key 只存在你浏览器本地（localStorage），不会上传到任何服务器。别人用这个网站也只用到他们自己的 Key。</p>
+    <label>Gemini（Google AI Studio，推荐，支持长文本+图片，无卡）
+      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">获取 ↗</a>
+      <input id="keyGemini" type="password" placeholder="AIza..." autocomplete="off" />
+    </label>
+    <label>OpenRouter（一个 Key 可用几十个免费模型，含代码/超长上下文）
+      <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">获取 ↗</a>
+      <input id="keyOpenrouter" type="password" placeholder="sk-or-..." autocomplete="off" />
+    </label>
+    <label>Groq（最快，免费 14400 次/天，仅需邮箱）
+      <a href="https://console.groq.com/keys" target="_blank" rel="noopener">获取 ↗</a>
+      <input id="keyGroq" type="password" placeholder="gsk_..." autocomplete="off" />
+    </label>
+    <div class="panel-actions">
+      <button id="saveKeys" class="btn primary">保存</button>
+      <button id="closeSettings" class="btn">关闭</button>
+      <span id="saveStatus" class="status"></span>
+    </div>
+  </div>
+
+  <main id="chat" class="chat"></main>
+
+  <footer class="composer">
+    <div id="attachments" class="attachments"></div>
+    <div class="composer-row">
+      <button id="attachBtn" class="icon-btn" title="附加文件（txt/md/pdf/docx/csv/图片）">📎</button>
+      <input id="fileInput" type="file" multiple class="hidden" accept=".txt,.md,.markdown,.json,.csv,.pdf,.docx,.js,.ts,.py,.java,.go,.c,.cpp,.sql,image/*" />
+      <textarea id="input" rows="2" placeholder="发条消息试试：贴一段长文让它总结，或发张图片让它看，或说‘帮我写段 Python 代码’…"></textarea>
+      <button id="sendBtn" class="btn primary">发送 ➤</button>
+    </div>
+    <div id="routeInfo" class="route-info"></div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
